@@ -1,0 +1,16 @@
+{
+  "name": "lumastream-backend",
+  "version": "1.0.0",
+  "description": "LumaStream auth API",
+  "main": "api/index.js",
+  "scripts": {
+    "start": "node api/index.js",
+    "dev": "node api/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}

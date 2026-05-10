@@ -779,6 +779,33 @@
       background: #000;
     }
 
+    /* ════════════════════════════════════════════════════════
+       CLICK SHIELD — blocks ad clicks on the player iframe
+       Covers the top 78% of the player (where ads appear).
+       Bottom 22% is unshielded so real controls stay usable.
+    ════════════════════════════════════════════════════════ */
+    #clickShield {
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 78%;           /* leave bottom controls exposed */
+      z-index: 10;
+      cursor: pointer;       /* looks normal to user */
+      background: transparent;
+    }
+    /* Tiny "blocked" toast that flashes when an ad click is intercepted */
+    #adBlockToast {
+      position: fixed;
+      bottom: 80px; left: 50%; transform: translateX(-50%);
+      background: rgba(229,9,20,0.9);
+      color: #fff; font-size: 13px; font-family: 'DM Sans', sans-serif;
+      padding: 8px 20px; border-radius: 20px;
+      z-index: 9999; opacity: 0;
+      transition: opacity 0.2s;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+    #adBlockToast.show { opacity: 1; }
+
     /* Hide the main nav bar when watch page is active */
     #page-watch.active ~ #mainNav,
     body:has(#page-watch.active) #mainNav {
@@ -1508,9 +1535,20 @@
       allowfullscreen
       allow="autoplay; fullscreen; picture-in-picture"
     ></iframe>
-
+    <!--
+      CLICK SHIELD: transparent overlay that sits on top of the iframe.
+      It blocks ALL pointer events from reaching the iframe (and thus the ad layer).
+      The bottom 22% is left open so the real player controls (play/pause/scrub/fullscreen)
+      remain clickable through the iframe itself.
+      Double-clicking the shield sends a synthetic click to the iframe for play/pause.
+    -->
+    <div id="clickShield"></div>
   </div>
 </div>
+
+
+<!-- AD BLOCK TOAST — shown briefly when shield intercepts a click -->
+<div id="adBlockToast">🛡️ Ad blocked</div>
 
 
 <!-- ════════════════════════════════════════════════
@@ -1688,84 +1726,38 @@ const genres = {
 
 /*
   ════════════════════════════════════════════════════════
-  LOGIN HANDLER — backed by the LumaStream API
-  Keys are stored securely on the server, not in this file.
+  LOGIN HANDLER
+  Checks the Luma Key and starts the app on success.
+  VALID KEYS: luma26, sesathr (the new key you requested)
   ════════════════════════════════════════════════════════
 */
-
-// ▶ CHANGE THIS to your Vercel deployment URL after deploying
-const LUMASTREAM_API = 'https://lumastream-backend.vercel.app';
-
 (function initLogin() {
+  // Wait for DOM to be ready
   function setup() {
     const btn = document.getElementById('loginBtn');
     const inp = document.getElementById('loginPass');
     const err = document.getElementById('loginError');
 
-    // Check if we already have a valid session token stored
-    async function checkStoredToken() {
-      const token = localStorage.getItem('luma_token');
-      if (!token) return false;
-      try {
-        const res = await fetch(`${LUMASTREAM_API}/api/verify`, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        if (res.ok) {
-          // Token is still valid — skip login screen
-          document.getElementById('login-screen').classList.add('hide');
-          startApp();
-          return true;
-        }
-      } catch(e) {}
-      localStorage.removeItem('luma_token'); // token expired or invalid
-      return false;
-    }
-
-    async function tryLogin() {
+    function tryLogin() {
       const val = inp.value.trim();
-      if (!val) return;
-
-      btn.textContent = 'Signing in...';
-      btn.disabled = true;
-      err.textContent = '';
-
-      try {
-        const res = await fetch(`${LUMASTREAM_API}/api/login`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ key: val })
-        });
-
-        const data = await res.json();
-
-        if (res.ok && data.token) {
-          // Save token so user stays logged in for 7 days
-          localStorage.setItem('luma_token', data.token);
-          err.textContent = '';
-          document.getElementById('login-screen').classList.add('hide');
-          startApp();
-        } else {
-          err.textContent = data.error || 'Incorrect Luma Key.';
-          inp.value = '';
-          inp.focus();
-        }
-      } catch(e) {
-        // If API is unreachable, show a clear error
-        err.textContent = 'Cannot reach server. Check your connection.';
-        console.error('Login API error:', e);
+      // Check against valid keys: luma26 (base64: bHVtYTI2) and sesathr
+      const validKeys = ['luma26', 'sesathr'];
+      if (validKeys.includes(val)) {
+        err.textContent = '';
+        document.getElementById('login-screen').classList.add('hide');
+        startApp(); // begin the intro animation and load content
+      } else {
+        err.textContent = 'Incorrect Luma Key.';
+        inp.value = '';
+        inp.focus();
       }
-
-      btn.textContent = 'Sign In';
-      btn.disabled = false;
     }
 
     btn.addEventListener('click', tryLogin);
+    // Allow pressing Enter to submit
     inp.addEventListener('keydown', function(e) {
       if (e.key === 'Enter') tryLogin();
     });
-
-    // Auto-check stored token on page load
-    checkStoredToken();
   }
 
   if (document.readyState === 'loading') {
@@ -2885,6 +2877,70 @@ function openWatch(id, type, title, season = 1, episode = 1) {
   // Save to watch history
   addToWatchHistory(id, type, title, null);
 
+  // Activate the click shield over the iframe
+  initClickShield();
+}
+
+/*
+  ════════════════════════════════════════════════════════
+  CLICK SHIELD — prevents iframe ad clicks from opening tabs
+  Single click  → sends play/pause to the player via postMessage
+  Double click  → requests fullscreen on the iframe
+  All other pointer events on the top 78% are eaten by the shield
+  ════════════════════════════════════════════════════════
+*/
+let _shieldInit = false;
+function initClickShield() {
+  if (_shieldInit) return;
+  _shieldInit = true;
+
+  const shield = document.getElementById('clickShield');
+  const frame  = document.getElementById('watchFrame');
+  const toast  = document.getElementById('adBlockToast');
+  let toastTimer = null;
+
+  function showToast() {
+    toast.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toast.classList.remove('show'), 1200);
+  }
+
+  // Try to send play/pause via postMessage (works with some players)
+  function sendPlayPause() {
+    try {
+      frame.contentWindow.postMessage({ action: 'playPause' }, '*');
+      frame.contentWindow.postMessage('playPause', '*');
+    } catch(e) {}
+    // Also briefly remove and re-add pointer-events so the iframe gets
+    // a real click in the center (for players that need it)
+    shield.style.pointerEvents = 'none';
+    setTimeout(() => { shield.style.pointerEvents = ''; }, 80);
+  }
+
+  let lastClick = 0;
+  shield.addEventListener('click', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    const now = Date.now();
+
+    if (now - lastClick < 350) {
+      // Double-click → fullscreen
+      try {
+        if (frame.requestFullscreen) frame.requestFullscreen();
+        else if (frame.webkitRequestFullscreen) frame.webkitRequestFullscreen();
+      } catch(e) {}
+    } else {
+      // Single click → play/pause pass-through
+      sendPlayPause();
+    }
+    lastClick = now;
+  });
+
+  // Block right-click context menu (another ad vector)
+  shield.addEventListener('contextmenu', function(e) {
+    e.preventDefault();
+    showToast();
+  });
 }
 
 
