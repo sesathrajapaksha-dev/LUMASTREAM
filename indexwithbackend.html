@@ -1693,40 +1693,70 @@ const genres = {
   ════════════════════════════════════════════════════════
 */
 
-(function initLogin() {
-  // Valid Luma Keys — stored here until backend is deployed
-  const VALID_KEYS = ['luma26', 'sesathr'];
+// ▶ CHANGE THIS to your Vercel deployment URL after deploying
+const LUMASTREAM_API = 'https://lumastream-backend.vercel.app';
 
+(function initLogin() {
   function setup() {
     const btn = document.getElementById('loginBtn');
     const inp = document.getElementById('loginPass');
     const err = document.getElementById('loginError');
 
-    // Check if already logged in via localStorage
-    function checkStored() {
-      const stored = localStorage.getItem('luma_session');
-      if (stored && VALID_KEYS.includes(stored)) {
-        document.getElementById('login-screen').classList.add('hide');
-        startApp();
-        return true;
-      }
+    // Check if we already have a valid session token stored
+    async function checkStoredToken() {
+      const token = localStorage.getItem('luma_token');
+      if (!token) return false;
+      try {
+        const res = await fetch(`${LUMASTREAM_API}/api/verify`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (res.ok) {
+          // Token is still valid — skip login screen
+          document.getElementById('login-screen').classList.add('hide');
+          startApp();
+          return true;
+        }
+      } catch(e) {}
+      localStorage.removeItem('luma_token'); // token expired or invalid
       return false;
     }
 
-    function tryLogin() {
+    async function tryLogin() {
       const val = inp.value.trim();
       if (!val) return;
 
-      if (VALID_KEYS.includes(val)) {
-        localStorage.setItem('luma_session', val); // stay logged in
-        err.textContent = '';
-        document.getElementById('login-screen').classList.add('hide');
-        startApp();
-      } else {
-        err.textContent = 'Incorrect Luma Key.';
-        inp.value = '';
-        inp.focus();
+      btn.textContent = 'Signing in...';
+      btn.disabled = true;
+      err.textContent = '';
+
+      try {
+        const res = await fetch(`${LUMASTREAM_API}/api/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key: val })
+        });
+
+        const data = await res.json();
+
+        if (res.ok && data.token) {
+          // Save token so user stays logged in for 7 days
+          localStorage.setItem('luma_token', data.token);
+          err.textContent = '';
+          document.getElementById('login-screen').classList.add('hide');
+          startApp();
+        } else {
+          err.textContent = data.error || 'Incorrect Luma Key.';
+          inp.value = '';
+          inp.focus();
+        }
+      } catch(e) {
+        // If API is unreachable, show a clear error
+        err.textContent = 'Cannot reach server. Check your connection.';
+        console.error('Login API error:', e);
       }
+
+      btn.textContent = 'Sign In';
+      btn.disabled = false;
     }
 
     btn.addEventListener('click', tryLogin);
@@ -1734,7 +1764,8 @@ const genres = {
       if (e.key === 'Enter') tryLogin();
     });
 
-    checkStored();
+    // Auto-check stored token on page load
+    checkStoredToken();
   }
 
   if (document.readyState === 'loading') {
