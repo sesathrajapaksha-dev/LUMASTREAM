@@ -1354,7 +1354,7 @@ window.addEventListener('load', function() {
 </script>
 
 <script>
-// ── OVERRIDE openWatch with correct Videasy player URLs ──
+// ── OVERRIDE openWatch with vidsrc.me player URLs ──
 window.openWatch = function(id, type, title, season, episode) {
   season = season || 1;
   episode = episode || 1;
@@ -1364,9 +1364,9 @@ window.openWatch = function(id, type, title, season, episode) {
 
   let src;
   if (type === 'tv') {
-    src = `https://player.videasy.net/tv/${id}/${season}/${episode}?color=e50914&nextEpisode=true&autoplayNextEpisode=true&episodeSelector=true&overlay=true`;
+    src = `https://vidsrc.me/embed/tv?tmdb=${id}&season=${season}&episode=${episode}`;
   } else {
-    src = `https://player.videasy.net/movie/${id}?color=e50914&overlay=true`;
+    src = `https://vidsrc.me/embed/movie?tmdb=${id}`;
   }
 
   document.getElementById('watchFrame').src = src;
@@ -1716,11 +1716,23 @@ const _origLoadHome = window.loadHome;
 window.loadHome = async function() {
   renderCWRow();
   const API_KEY = '4e44d9029b1270a757cddc766a1bcb63';
+
+  // Timeout fallback: if TMDB doesn't respond in 8s, hide the hero loading state
+  const heroFallbackTimer = setTimeout(() => {
+    const heroTitle = document.getElementById('heroTitle');
+    if (heroTitle && (heroTitle.textContent === 'LOADING...' || heroTitle.textContent === 'Loading...')) {
+      heroTitle.textContent = '';
+      const heroBg = document.getElementById('heroBg');
+      if (heroBg) heroBg.style.cssText = 'position:absolute;inset:0;background:#111;';
+    }
+  }, 8000);
+
   try {
     const trendingData = await fetch(`https://api.themoviedb.org/3/trending/all/day?api_key=${API_KEY}`).then(r => r.json());
+    clearTimeout(heroFallbackTimer);
     const items = (trendingData.results || []).filter(x => x.backdrop_path);
     if (items.length) initHeroRotation(items);
-  } catch(e) {}
+  } catch(e) { clearTimeout(heroFallbackTimer); }
   return _origLoadHome();
 };
 
